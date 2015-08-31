@@ -57,10 +57,7 @@ if ( -f "$dir/perms.conf" ) {
 
         my ( $filetype, $mode, $pattern ) = split( ' ', $line, 3 );
 
-        eval {
-            push( @PERM_MAP_RULES,
-                [ $filetype, oct($mode), qr($pattern), $line ] );
-        };
+        eval { push( @PERM_MAP_RULES, [ $filetype, oct($mode), qr($pattern), $line ] ); };
         if ($@) {
             warn "error processing perms.conf: $@\n";
         }
@@ -73,7 +70,7 @@ if ( -f "$dir/perms.conf" ) {
 # by the default rules
 #
 my $ERRORS   = 0;
-my  $TOP_DIR  = $dir;
+my $TOP_DIR  = $dir;
 my $SAW_HTML = 0;
 File::Find::finddepth( { wanted => \&fix_perms }, $dir );
 
@@ -193,11 +190,9 @@ sub fix_perms {
     }
 
     if ( $gid ne $want_gid || $uid ne $want_uid ) {
-        print
-            "$file: uid/gid needs to be changed from $uid/$gid to $want_uid/$want_gid\n";
+        print "$file: uid/gid needs to be changed from $uid/$gid to $want_uid/$want_gid\n";
         if ( !$DRY_RUN ) {
-            chown $want_uid, $want_gid,
-                $file || warn "$file: unable to change owner.\n" && $ERRORS++;
+            chown $want_uid, $want_gid, $file || warn "$file: unable to change owner.\n" && $ERRORS++;
         }
 
     }
@@ -205,8 +200,7 @@ sub fix_perms {
     my $have_mode = $mode & 07777;
     if ( $have_mode != $want_mode ) {
         print "$file: $type\n";
-        printf "$file: mode needs to be changed from %o to %o.\n", $have_mode,
-            $want_mode;
+        printf "$file: mode needs to be changed from %o to %o.\n", $have_mode, $want_mode;
 
         if ( !$DRY_RUN ) {
             chmod $want_mode, $file
