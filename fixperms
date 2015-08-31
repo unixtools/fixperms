@@ -1,0 +1,41 @@
+#!/usr/bin/perl
+
+# Begin-Doc
+# Name: fixperms
+# Description: helper script to run handle-fixperms via sudo if necessary
+# End-Doc
+
+use strict;
+use Cwd;
+
+my $user = $ENV{SUDO_USER};
+if ( $user eq "" ) {
+    exec( "/usr/bin/sudo", "/usr/bin/fixperms", @ARGV );
+}
+
+if ( $user eq "root" ) {
+    my $cwd = getcwd;
+    if ( $cwd =~ m|^/local/([^/]+)| ) {
+        if ( getpwnam($1) ) {
+            $user = $1;
+            print
+                "Running as root, forcing user to $user based on current dir ($cwd).\n";
+        }
+    }
+}
+if ( $user eq "root" ) {
+    die "Cannot run fixperms for root.\n";
+}
+
+my @info = getpwnam($user);
+if ( $user ne $info[0] ) {
+    die "Cannot determine user to run as!\n" if ( !$user );
+}
+
+if ( $ARGV[0] eq "-n" ) {
+    system( "/usr/sbin/handle-fixperms",
+        "-n", $user, $info[7] );
+}
+else {
+    system( "/usr/sbin/handle-fixperms", $user, $info[7] );
+}

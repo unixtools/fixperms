@@ -1,0 +1,237 @@
+#!/usr/bin/perl
+
+# Begin-Doc
+# Name: handle-set-perms.pl
+# Description: script that handles a request to reset permissions on an account to standard promoter-assigned perms
+# End-Doc
+
+$| = 1;
+use File::Find;
+use strict;
+
+# This script will run either as root or as the application user. If the application user,
+# it will in general be unable to change file ownership, though I can probably
+# code it to do that via a copy and rewrite if necessary.
+
+my $DRY_RUN = 0;
+if ( $ARGV[0] eq "-n" ) {
+    $DRY_RUN = 1;
+    shift @ARGV;
+}
+
+# /usr/sbin/handle-set-perms $appuser $tmpdir/checkout
+my $userid = $ARGV[0] || die &usage("must specify owner userid");
+my $dir    = $ARGV[1] || die &usage("must specify directory");
+
+if ( !-e $dir ) {
+    die "specified dir must exist";
+}
+
+my @userinfo = getpwnam($userid);
+if ( $userinfo[0] ne $userid ) {
+    die "specified userid must exist";
+}
+my $WANT_UID = $userinfo[2];
+my $WANT_GID = $userinfo[3];
+
+print "UserID: $userid\n";
+print "Directory: $dir\n";
+print "Want UID: $WANT_UID\n";
+print "Want GID: $WANT_GID\n";
+print "Current UID: $<\n";
+
+#
+# Load the permissions map file if one exists to allow
+#
+my @PERM_MAP_RULES = ();
+if ( -f "$dir/perms.conf" ) {
+    open( PERMS, "$dir/perms.conf" );
+    while ( my $line = <PERMS> ) {
+        chomp($line);
+
+        $line =~ s|\s*#.*||gio;
+        $line =~ s|\s*$||gio;
+        $line =~ s|^\s*||gio;
+
+        next if ( $line eq "" );
+
+        my ( $filetype, $mode, $pattern ) = split( ' ', $line, 3 );
+
+        eval {
+            push( @PERM_MAP_RULES,
+                [ $filetype, oct($mode), qr($pattern), $line ] );
+        };
+        if ($@) {
+            warn "error processing perms.conf: $@\n";
+        }
+    }
+    close(PERMS);
+}
+
+#
+# Now process the directory structure setting permissions as directed
+# by the default rules
+#
+my $ERRORS   = 0;
+my  $TOP_DIR  = $dir;
+my $SAW_HTML = 0;
+File::Find::finddepth( { wanted => \&fix_perms }, $dir );
+
+if ($ERRORS) {
+    exit 1;
+}
+
+# Begin-Doc
+# Name: fix_perms
+# Description: callback per-entry that actually fixes the permissions
+# End-Doc
+
+sub fix_perms {
+    my ( $dev, $ino, $mode, $nlink, $uid, $gid ) = lstat($_);
+    my $file      = $File::Find::name;
+    my $want_mode = 0;
+    my $want_uid  = $WANT_UID;
+    my $want_gid  = $WANT_GID;
+
+    my $is_exec = $mode & 0111;
+
+    my $type       = "";
+    my $skip_file  = 0;
+    my $skip_perms = 0;
+
+    if ( ( !-f $file && !-d $file ) || -l $file ) {
+        $type      = "is a symlink or other file we will not touch";
+        $skip_file = 1;
+    }
+    elsif ($file =~ m|/\.svn$|
+        || $file =~ m|/\.svn/|
+        || $file =~ m|/\.subversion$|
+        || $file =~ m|/\.subversion/| )
+    {
+        $type = "is an svn private dir.";
+        if ( !( $mode & 011 ) ) {
+            $want_mode = $mode & 0777;
+        }
+        elsif ( -f $file ) {
+            $want_mode = 0600;
+        }
+        elsif ( -d $file ) {
+            $want_mode = 0700;
+        }
+        $skip_perms = 1;
+    }
+    elsif ( $file =~ m|^$TOP_DIR/html$| && -d $file ) {
+        $type      = "is an html top level dir.";
+        $want_mode = 0755;
+    }
+    elsif ( $file =~ m|^$TOP_DIR/html/| && -d $file ) {
+        $type      = "is an html subdir.";
+        $want_mode = 0755;
+    }
+    elsif ( $file =~ m|^$TOP_DIR/html/| && -f $file ) {
+        $type      = "is an html subfile.";
+        $want_mode = 0644;
+        $SAW_HTML  = 1;
+    }
+    elsif ( $file eq $TOP_DIR ) {
+        $type = "is the top level dir";
+        if ($SAW_HTML) {
+
+            # We don't want people looking around the account
+            $want_mode = 0711;
+        }
+        else {
+            $want_mode = 0700;
+        }
+    }
+    elsif ( -f $file && $is_exec ) {
+        $type      = "is a file with at least one executable bit set.";
+        $want_mode = 0700;
+    }
+    elsif ( -f $file ) {
+        $type      = "is a file with no executable bit set.";
+        $want_mode = 0600;
+    }
+    elsif ( -d $file ) {
+        $type      = "is a regular directory.";
+        $want_mode = 0700;
+    }
+    else {
+        $type      = "is something else.";
+        $want_mode = 0600;
+    }
+
+    my $relfile = $file;
+    $relfile =~ s|^$TOP_DIR||o;
+    if ( $relfile eq "" ) {
+        $relfile = "/";
+    }
+
+    if ( !$skip_perms ) {
+        foreach my $rref (@PERM_MAP_RULES) {
+            my ( $type, $mode, $regex, $line ) = @{$rref};
+
+            if ( $relfile =~ /$regex/ ) {
+                if (   ( $type eq "dir" && -d $file )
+                    || ( $type eq "file" && -f $file ) )
+                {
+                    print "$file: matched rule ($line)\n";
+                    $want_mode = $mode;
+                }
+            }
+        }
+    }
+
+    if ($skip_file) {
+        print "$file: skipping this file.\n";
+        next;
+    }
+
+    if ( $mode & 06000 ) {
+        print "$file: file is setuid/setgid, skipping.\n";
+        next;
+    }
+
+    if ( $gid ne $want_gid || $uid ne $want_uid ) {
+        print
+            "$file: uid/gid needs to be changed from $uid/$gid to $want_uid/$want_gid\n";
+        if ( !$DRY_RUN ) {
+            chown $want_uid, $want_gid,
+                $file || warn "$file: unable to change owner.\n" && $ERRORS++;
+        }
+
+    }
+
+    my $have_mode = $mode & 07777;
+    if ( $have_mode != $want_mode ) {
+        print "$file: $type\n";
+        printf "$file: mode needs to be changed from %o to %o.\n", $have_mode,
+            $want_mode;
+
+        if ( !$DRY_RUN ) {
+            chmod $want_mode, $file
+                || warn "$file: unable to change permissions.\n" && $ERRORS++;
+        }
+    }
+
+}
+
+# Begin-Doc
+# Name: usage
+# Description: simple usage notice for the tool
+# End-Doc
+sub usage {
+    my $msg = shift;
+    print "Usage: $0 [-n] owner directory\n";
+    print " Error: $msg\n";
+    print "\n";
+    print "If present, a 'perms.conf' file in top level of directory\n";
+    print "will be read and processed for lines of the form:\n";
+    print "\n";
+    print "dir|file mode regex\n";
+    print "\n";
+    print "regex will be matched against the relative filename within\n";
+    print "directory, starting with a slash.\n";
+    exit(1);
+}
+
