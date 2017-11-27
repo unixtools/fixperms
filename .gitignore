@@ -1,0 +1,6 @@
+debian/debhelper-build-stamp
+debian/files
+debian/fixperms.debhelper.log
+debian/fixperms.substvars
+debian/fixperms/
+debian/tmp/
