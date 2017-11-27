@@ -19,7 +19,7 @@ dist:
 
 deb: dist
 	cp ../fixperms-$(VERSION).tar.gz ../fixperms_$(VERSION).orig.tar.gz
-	dpkg-buildpackage
+	dpkg-buildpackage -us -uc
 	rm ../fixperms_$(VERSION).orig.tar.gz
 
 rpm: dist
