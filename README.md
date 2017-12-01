@@ -7,7 +7,7 @@ in conjunction with cgiwrap and static web development.
 
 In addition to some basic rules like:
 
-	Executable scripst - owned by user, executable, not executable or readable by others
+	Executable script - owned by user, executable, not executable or readable by others
 	Top level dir traversable if any html directory
 	HTML dir contents readable by all users
 
@@ -31,5 +31,7 @@ dir 755 .*/.git
 dir 755 .*/.git/.*
 file 755 .*/.git/.*
 dir 755 .
+ignore .cache/.*
+cmd do-something-after-fixperms-is-run
 ----------------
 
