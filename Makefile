@@ -6,6 +6,7 @@ all:
 install:
 	mkdir -p $(DESTDIR)/usr/bin
 	mkdir -p $(DESTDIR)/usr/sbin
+	mkdir -p $(DESTDIR)/etc/sudoers.d
 	install -c -m755 -oroot -groot fixperms $(DESTDIR)/usr/bin
 	install -c -m755 -oroot -groot handle-fixperms $(DESTDIR)/usr/sbin
 	install -c -m644 -oroot -groot -T sudo-fixperms.conf $(DESTDIR)/etc/sudoers.d/fixperms
