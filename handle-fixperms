@@ -1,30 +1,56 @@
 #!/usr/bin/perl
 
 # Begin-Doc
-# Name: handle-set-perms.pl
-# Description: script that handles a request to reset permissions on an account to standard promoter-assigned perms
+# Name: handle-fixperms
+# Description: script that handles a request to reset permissions on an account to standardized permissions
+# Usage: /usr/sbin/handle-fixperms $appuser $tmpdir/checkout
 # End-Doc
 
 $| = 1;
 use File::Find;
+use Getopt::Long;
 use strict;
 
 # This script will run either as root or as the application user. If the application user,
-# it will in general be unable to change file ownership, though I can probably
-# code it to do that via a copy and rewrite if necessary.
+# it will in general be unable to change file ownership.
+
+# It would be possible to change to copy operation to change file ownership, though that
+# is likely more trouble than it is worth compared to running this through sudo via
+# the fixperms helper script.
 
 my $DRY_RUN = 0;
-if ( $ARGV[0] eq "-n" ) {
-    $DRY_RUN = 1;
-    shift @ARGV;
+my $debug;
+my $help;
+my $userid;
+my $dir;
+
+my $res = GetOptions(
+    "help+"      => \$help,
+    "debug+"     => \$debug,
+    "dry-run|n+" => \$DRY_RUN,
+    "user=s"     => \$userid,
+    "dir=s"      => \$dir
+);
+
+if ( scalar(@ARGV) >= 2 && !defined($userid) && !defined($dir) ) {
+    $userid = $ARGV[0];
+    $dir    = $ARGV[1];
 }
 
-# /usr/sbin/handle-set-perms $appuser $tmpdir/checkout
-my $userid = $ARGV[0] || die &usage("must specify owner userid");
-my $dir    = $ARGV[1] || die &usage("must specify directory");
+if ( $help || !$res ) {
+    &usage("");
+}
+
+if ( !$userid ) {
+    &usage("must specify owner userid");
+}
+
+if ( !$dir ) {
+    &usage("must specify directory");
+}
 
 if ( !-e $dir ) {
-    die "specified dir must exist";
+    &usage("specified dir must exist");
 }
 
 my @userinfo = getpwnam($userid);
@@ -34,20 +60,27 @@ if ( $userinfo[0] ne $userid ) {
 my $WANT_UID = $userinfo[2];
 my $WANT_GID = $userinfo[3];
 
-print "UserID: $userid\n";
 print "Directory: $dir\n";
-print "Want UID: $WANT_UID\n";
-print "Want GID: $WANT_GID\n";
-print "Current UID: $<\n";
+print "User: $userid ($WANT_UID/$WANT_GID)\n";
+if ( $< != 0 ) {
+    print "Current UID: $<\n";
+    if ( $< != $WANT_UID ) {
+        print "UID mismatch, exiting.\n";
+        exit(1);
+    }
+}
 
 #
 # Load the permissions map file if one exists to allow
 #
+my @POST_COMMANDS  = ();
 my @PERM_MAP_RULES = ();
 if ( -f "$dir/perms.conf" ) {
-    open( PERMS, "$dir/perms.conf" );
-    while ( my $line = <PERMS> ) {
+    print "Loading permissions config...\n";
+    open( my $perms, "$dir/perms.conf" );
+    while ( my $line = <$perms> ) {
         chomp($line);
+        $debug && print "Processing perm config line: $line\n";
 
         $line =~ s|\s*#.*||gio;
         $line =~ s|\s*$||gio;
@@ -55,24 +88,67 @@ if ( -f "$dir/perms.conf" ) {
 
         next if ( $line eq "" );
 
-        my ( $filetype, $mode, $pattern ) = split( ' ', $line, 3 );
+        if ( $line =~ /^cmd\s+(.*)$/o ) {
+            push( @POST_COMMANDS, $1 );
+            next;
+        }
 
-        eval { push( @PERM_MAP_RULES, [ $filetype, oct($mode), qr($pattern), $line ] ); };
-        if ($@) {
-            warn "error processing perms.conf: $@\n";
+        if ( $line =~ /^(dir|file)\s+(.+)\s*$/io ) {
+            my $filetype = $1;
+            my ( $mode, $pattern ) = split( ' ', $2, 2 );
+
+            eval { push( @PERM_MAP_RULES, [ $filetype, oct($mode), qr($pattern), $line ] ); };
+            if ($@) {
+                warn "error processing perms.conf set: $@\n";
+            }
+            else {
+                $debug && "Added $filetype rule for mode ($mode) with pattern ($pattern).\n";
+            }
+        }
+        elsif ( $line =~ /^ignore\s+(.+)\s*$/io ) {
+            eval { push( @PERM_MAP_RULES, [ "ignore", undef, qr($1), $line ] ); };
+            if ($@) {
+                warn "error processing perms.conf ignore: $@\n";
+            }
+            else {
+                $debug && "Added ignore rule with pattern ($1).\n";
+            }
+        }
+        else {
+            warn "error processing perms.conf line: $line\n";
         }
     }
-    close(PERMS);
+    close($perms);
+    print "Done loading permissions.\n";
 }
 
 #
 # Now process the directory structure setting permissions as directed
 # by the default rules
 #
+my $ACTIONS  = 0;
 my $ERRORS   = 0;
 my $TOP_DIR  = $dir;
 my $SAW_HTML = 0;
 File::Find::finddepth( { wanted => \&fix_perms }, $dir );
+if ($DRY_RUN) {
+    print "$ACTIONS actions would have been performed.\n";
+}
+else {
+    print "$ACTIONS actions performed.\n";
+}
+
+foreach my $post_cmd (@POST_COMMANDS) {
+    if ( $ENV{SUDO_USER} ) {
+        print "\nExecuting Post Command (as ", $ENV{SUDO_USER}, "): $post_cmd\n";
+        system( "su", "-", $ENV{SUDO_USER}, "-c", $post_cmd );
+    }
+    else {
+        print "\nExecuting Post Command: $post_cmd\n";
+        system($post_cmd);
+    }
+    print "\n";
+}
 
 if ($ERRORS) {
     exit 1;
@@ -92,13 +168,62 @@ sub fix_perms {
 
     my $is_exec = $mode & 0111;
 
-    my $type       = "";
-    my $skip_file  = 0;
-    my $skip_perms = 0;
+    my $type        = "";
+    my $skip_file   = 0;
+    my $skip_perms  = 0;
+    my $skip_reason = 0;
+    my $quiet       = 0;
 
-    if ( ( !-f $file && !-d $file ) || -l $file ) {
-        $type      = "is a symlink or other file we will not touch";
+    my $relfile = $file;
+    $relfile =~ s|^$TOP_DIR||o;
+    if ( $relfile eq "" ) {
+        $relfile = "/";
+    }
+
+    # First pass scan against permissions map to find ignore entries
+    my $is_ignore = 0;
+    foreach my $rref (@PERM_MAP_RULES) {
+        my ( $type, $mode, $regex, $line ) = @{$rref};
+
+        if ( $relfile =~ /$regex/ ) {
+            if (   ( $type eq "dir" && -d $file )
+                || ( $type eq "file" && -f $file ) )
+            {
+                $is_ignore = 0;
+                $debug > 1 && print "$file: matched precheck for rule ($line)\n";
+            }
+            elsif ( $type eq "ignore" ) {
+                $debug > 1 && print "$file: matched precheck ignore for rule ($line)\n";
+                $skip_reason = "ignore rule";
+                $is_ignore   = 1;
+            }
+        }
+    }
+
+    if ($is_ignore) {
         $skip_file = 1;
+        if ( !$debug ) {
+            $quiet = 1;
+        }
+    }
+
+    # Check for some explicitly quiet dirs first
+    elsif ($file =~ m|/\.git$|
+        || $file =~ m|/\.git/| )
+    {
+        $quiet = 1;
+    }
+
+    if ( !-f $file && !-d $file ) {
+        $type        = "is not file or directory";
+        $skip_reason = "not file or directory";
+        $skip_file   = 1;
+    }
+    elsif ( -l $file ) {
+        $type        = "is a symlink";
+        $skip_reason = "symlink";
+        $quiet       = 1;
+        $skip_file   = 1;
     }
     elsif ($file =~ m|/\.svn$|
         || $file =~ m|/\.svn/|
@@ -158,12 +283,6 @@ sub fix_perms {
         $want_mode = 0600;
     }
 
-    my $relfile = $file;
-    $relfile =~ s|^$TOP_DIR||o;
-    if ( $relfile eq "" ) {
-        $relfile = "/";
-    }
-
     if ( !$skip_perms ) {
         foreach my $rref (@PERM_MAP_RULES) {
             my ( $type, $mode, $regex, $line ) = @{$rref};
@@ -172,25 +291,30 @@ sub fix_perms {
                 if (   ( $type eq "dir" && -d $file )
                     || ( $type eq "file" && -f $file ) )
                 {
-                    print "$file: matched rule ($line)\n";
+                    !$quiet && print "$file: matched rule ($line)\n";
                     $want_mode = $mode;
                 }
             }
         }
     }
 
-    if ($skip_file) {
-        print "$file: skipping this file.\n";
-        next;
+    if ( $mode & 06000 ) {
+        $skip_reason = "setuid/setgid";
+        $skip_file   = 1;
     }
 
-    if ( $mode & 06000 ) {
-        print "$file: file is setuid/setgid, skipping.\n";
+    if ($skip_file) {
+        if ( !$quiet || $debug > 1 ) {
+            print "$file: skipping this file. ($skip_reason)\n";
+        }
         next;
     }
 
     if ( $gid ne $want_gid || $uid ne $want_uid ) {
-        print "$file: uid/gid needs to be changed from $uid/$gid to $want_uid/$want_gid\n";
+        if ( !$quiet || $debug > 1 ) {
+            print "$file: uid/gid needs to be changed from $uid/$gid to $want_uid/$want_gid\n";
+        }
+        $ACTIONS++;
         if ( !$DRY_RUN ) {
             chown $want_uid, $want_gid, $file || warn "$file: unable to change owner.\n" && $ERRORS++;
         }
@@ -199,15 +323,17 @@ sub fix_perms {
 
     my $have_mode = $mode & 07777;
     if ( $have_mode != $want_mode ) {
-        print "$file: $type\n";
-        printf "$file: mode needs to be changed from %o to %o.\n", $have_mode, $want_mode;
+        if ( !$quiet || $debug > 1 ) {
+            print "$file: $type\n";
+            printf "$file: mode needs to be changed from %o to %o.\n", $have_mode, $want_mode;
+        }
 
+        $ACTIONS++;
         if ( !$DRY_RUN ) {
             chmod $want_mode, $file
                 || warn "$file: unable to change permissions.\n" && $ERRORS++;
         }
     }
-
 }
 
 # Begin-Doc
@@ -216,16 +342,24 @@ sub fix_perms {
 # End-Doc
 sub usage {
     my $msg = shift;
-    print "Usage: $0 [-n] owner directory\n";
-    print " Error: $msg\n";
+    print "Usage: $0 [-n] [--dry-run] [--debug] [--user owner] [--dir directory] [owner directory]\n";
+    if ($msg) {
+        print " Error: $msg\n";
+    }
     print "\n";
     print "If present, a 'perms.conf' file in top level of directory\n";
     print "will be read and processed for lines of the form:\n";
     print "\n";
     print "dir|file mode regex\n";
+    print "ignore regex\n";
+    print "cmd command args\n";
     print "\n";
     print "regex will be matched against the relative filename within\n";
-    print "directory, starting with a slash.\n";
+    print "top level directory, starting with a slash. Example: /.ssh/authorized_keys\n";
+    print "\n";
+    print "ignore will skip any match silently unless debug is enabled\n";
+    print "\n";
+    print "The last matching entry in the file wins.\n";
     exit(1);
 }
 

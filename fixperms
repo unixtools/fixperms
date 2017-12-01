@@ -7,6 +7,7 @@
 
 use strict;
 use Cwd;
+use Getopt::Long;
 
 my $user = $ENV{SUDO_USER};
 if ( $user eq "" ) {
@@ -26,14 +27,28 @@ if ( $user eq "root" ) {
     die "Cannot run fixperms for root.\n";
 }
 
+my $ignore_user;
+my $ignore_dir;
+my $help;
+
+Getopt::Long::Configure("pass_through");
+my $res = GetOptions( "user=s" => \$ignore_user, "dir=s" => \$ignore_dir, "help+" => \$help );
+
+if ( $ignore_user || $ignore_dir ) {
+    print "Cannot specify user or dir when calling $0 helper.\n";
+    exit(1);
+}
+
 my @info = getpwnam($user);
 if ( $user ne $info[0] ) {
     die "Cannot determine user to run as!\n" if ( !$user );
 }
 
-if ( $ARGV[0] eq "-n" ) {
-    system( "/usr/sbin/handle-fixperms", "-n", $user, $info[7] );
+my @args = ();
+push( @args, "--user" => $user );
+push( @args, "--dir"  => $info[7] );
+if ($help) {
+    push( @args, "--help" );
 }
-else {
-    system( "/usr/sbin/handle-fixperms", $user, $info[7] );
-}
+
+system( "/usr/sbin/handle-fixperms", @args, @ARGV );
