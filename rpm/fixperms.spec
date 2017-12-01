@@ -1,7 +1,7 @@
 
 Summary: Fixperms Tool
 Name: fixperms
-Version: 2.0.0
+Version: 2.1.0
 Release: 1%{?dist}
 License: Distributable
 Group: System Environment/Base
@@ -35,8 +35,11 @@ make DESTDIR=$RPM_BUILD_ROOT install
 
 mkdir -p $RPM_BUILD_ROOT/usr/bin
 mkdir -p $RPM_BUILD_ROOT/usr/sbin
-cp -pr fixperms $RPM_BUILD_ROOT/usr/bin
-cp -pr handle-fixperms $RPM_BUILD_ROOT/usr/sbin
+mkdir -p $RPM_BUILD_ROOT/etc/sudoers.d
+install -c -m755 -oroot -groot fixperms $RPM_BUILD_ROOT/usr/bin
+install -c -m755 -oroot -groot handle-fixperms $RPM_BUILD_ROOT/usr/sbin
+install -c -m644 -oroot -groot -T sudo-fixperms.conf $RPM_BUILD_ROOT/etc/sudoers.d/fixperms
+
 
 %clean
 %{__rm} -rf %{buildroot}
@@ -45,5 +48,6 @@ cp -pr handle-fixperms $RPM_BUILD_ROOT/usr/sbin
 
 %attr(0755, root, root) /usr/bin/fixperms
 %attr(0755, root, root) /usr/sbin/handle-fixperms
+%attr(0755, root, root) /etc/sudoers.d/fixperms
 
 %changelog
