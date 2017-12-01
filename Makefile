@@ -1,4 +1,4 @@
-VERSION=2.0.0
+VERSION=2.1.0
 TOP=`pwd`
 
 all:
@@ -6,8 +6,8 @@ all:
 install:
 	mkdir -p $(DESTDIR)/usr/bin
 	mkdir -p $(DESTDIR)/usr/sbin
-	cp fixperms $(DESTDIR)/usr/bin
-	cp handle-fixperms $(DESTDIR)/usr/sbin
+	install -c -m755 -oroot -groot fixperms $(DESTDIR)/usr/bin
+	install -c -m755 -oroot -groot handle-fixperms $(DESTDIR)/usr/sbin
 
 dist:
 	rm -rf /tmp/fixperms-$(VERSION)
