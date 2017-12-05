@@ -291,7 +291,7 @@ sub fix_perms {
                 if (   ( $type eq "dir" && -d $file )
                     || ( $type eq "file" && -f $file ) )
                 {
-                    !$quiet && print "$file: matched rule ($line)\n";
+                    !$quiet && $debug > 1 && print "$file: matched rule ($line)\n";
                     $want_mode = $mode;
                 }
             }
