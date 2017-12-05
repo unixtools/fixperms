@@ -1,3 +1,9 @@
+fixperms (2.1.1-1) unstable; urgency=low
+
+  * reduce output
+
+ -- Nathan Neulinger <nneul@neulinger.org>  Tue, 05 Dec 2017 15:30:00 -0600
+
 fixperms (2.1.0-1) unstable; urgency=low
 
   * packaging/functionality updates
